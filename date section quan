@@ -5,6 +5,8 @@
 // @description  sistic
 // @match        https://ticketing.sistic.com.sg/sistic/booking/*
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/bfdissfho/my_sistic/refs/heads/main/date%20section%20quan
+// @downloadURL  https://raw.githubusercontent.com/bfdissfho/my_sistic/refs/heads/main/date%20section%20quan
 // @grant        none
 // ==/UserScript==
 
