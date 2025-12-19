@@ -4,6 +4,8 @@
 // @version      1.0
 // @description  sistic
 // @match        https://www.sistic.com.sg/events/*
+// @updateURL    https://raw.githubusercontent.com/bfdissfho/my_sistic/refs/heads/main/buy_tickets
+// @downloadURL  https://raw.githubusercontent.com/bfdissfho/my_sistic/refs/heads/main/buy_tickets
 // @grant        none
 // ==/UserScript==
 
