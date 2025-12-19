@@ -1,0 +1,62 @@
+// ==UserScript==
+// @name         sistic_buy_tickets
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  sistic
+// @match        https://www.sistic.com.sg/events/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    console.log("⏳ Lobby 監控腳本啟動...");
+
+    // 設定：刷新前的等待時間 (毫秒)
+    // 建議至少設 1000 (1秒)，避免刷新太快被網站封鎖 IP
+    const REFRESH_DELAY = 1000;
+
+    // 設定：最長等待按鈕出現的時間 (毫秒)
+    // 如果網頁載入後過了這個時間按鈕還沒出來，就視為未開賣，直接刷新
+    const MAX_WAIT_TIME = 5000;
+
+    let startTime = Date.now();
+
+    function checkButton() {
+        // 1. 尋找含有 "BUY TICKETS" 文字的按鈕
+        // 使用 XPath 忽略大小寫並精確定位
+        const xpath = "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'buy tickets')]";
+        const button = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+
+        // 檢查是否超時
+        if (Date.now() - startTime > MAX_WAIT_TIME) {
+            console.warn("⚠️ 等待超時 (按鈕未出現)，準備刷新...");
+            location.reload();
+            return;
+        }
+
+        if (button) {
+            // 2. 檢查是否包含指定顏色 Class
+            // 您的條件: bg-[#0082D6]
+            if (button.classList.contains('bg-[#0082D6]')) {
+                console.log("✅ 偵測到藍色按鈕 (#0082D6)！正在點擊...");
+                button.click();
+            } else {
+                console.log("⛔ 按鈕存在但不是藍色 (可能變灰或未啟用)，準備刷新...");
+                setTimeout(() => location.reload(), Math.random() * 1000 + 500); // 隨機延遲 0.5~1.5秒 防偵測
+            }
+        } else {
+            // 按鈕還沒出來，繼續檢查
+            console.log("Scanning...");
+            requestAnimationFrame(checkButton);
+        }
+    }
+
+    // 頁面載入後開始檢查
+    window.addEventListener('load', checkButton);
+    // 為了保險，如果 window.load 已經過了，直接執行
+    if (document.readyState === 'complete') {
+        checkButton();
+    }
+
+})();
