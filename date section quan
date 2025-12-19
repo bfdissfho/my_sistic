@@ -1,0 +1,404 @@
+// ==UserScript==
+// @name         Sistic date section quan
+// @namespace    http://tampermonkey.net/
+// @version      14.0
+// @description  sistic
+// @match        https://ticketing.sistic.com.sg/sistic/booking/*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ================= 🔧 設定區域 =================
+
+    const TARGET_DATE = "22-01-2026";
+
+    // 格式：[ "價格", "Section(選單模式)", "SeatLevel(地圖模式)", "CatNum(地圖模式)" ]
+    const PREFERENCE_LIST = [
+        ["328", "SVIP Z", "Circle 1", "1"],
+        ["258", "FA 14", "Circle 2", "1"],
+        ["198", "FA 18", "Circle 3", "2"],
+        ["158", "FA 16", "Circle 2", "4"]
+    ];
+
+    const TICKET_QUANTITY = 2;          // 購買張數
+    const WAIT_MINUTES_BEFORE_CART = 8; // 成功後倒數
+
+    // ==============================================
+
+    console.log("🚀 Sistic V14 (自動刷新版) 啟動...");
+
+    let globalOverviewData = null;
+    let globalDetailsData = null;
+
+    // --- XHR 攔截 ---
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function() {
+        this.addEventListener('load', function() {
+            try {
+                if (this.responseURL) {
+                    if (this.responseURL.includes('seat-map/overview')) {
+                        globalOverviewData = JSON.parse(this.responseText);
+                        console.log("📡 [Overview] 攔截成功");
+                    }
+                    if (this.responseURL.includes('seat-map/details')) {
+                        globalDetailsData = JSON.parse(this.responseText);
+                        console.log("📡 [Details] 庫存攔截成功");
+                    }
+                }
+            } catch (e) {}
+        });
+        origOpen.apply(this, arguments);
+    };
+
+    // --- 工具 ---
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    function waitForElement(selector, isXpath = false, timeout = 5000) {
+        return new Promise((resolve) => {
+            const timer = setInterval(() => {
+                let el;
+                try {
+                    if (isXpath) el = document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    else el = document.querySelector(selector);
+                } catch(e){}
+                if (el && el.offsetParent !== null) {
+                    clearInterval(timer);
+                    resolve(el);
+                }
+            }, 200);
+            setTimeout(() => { clearInterval(timer); resolve(null); }, timeout);
+        });
+    }
+
+    async function clickPath(element) {
+        if (!element) return;
+        try { element.scrollIntoView({block: "center", behavior: "auto"}); } catch(e){}
+        const eventOpts = { bubbles: true, cancelable: true, view: window };
+        element.dispatchEvent(new MouseEvent('mousedown', eventOpts));
+        element.dispatchEvent(new MouseEvent('mouseup', eventOpts));
+        element.dispatchEvent(new MouseEvent('click', eventOpts));
+        console.log(`⚡ 點擊 Path: ${element.getAttribute('aria-label') || 'Element'}`);
+    }
+
+    // --- 核心邏輯：DOM 連續座位 ---
+    function findConsecutiveSeatsFromDOM(qty) {
+        const allPaths = document.querySelectorAll('path.seatmap-clickable');
+        console.log(`🔎 掃描到 ${allPaths.length} 個座位 Path`);
+
+        const availableSeats = [];
+        const regex = /Row\s+(.+?)\s+Seat\s+(\d+)\s+Available/i;
+
+        allPaths.forEach(path => {
+            const label = path.getAttribute('aria-label') || "";
+            if (label.includes('Available')) {
+                const match = label.match(regex);
+                if (match) {
+                    availableSeats.push({
+                        element: path,
+                        row: match[1].trim(),
+                        seatNum: parseInt(match[2], 10),
+                        label: label
+                    });
+                }
+            }
+        });
+
+        console.log(`✅ 其中 ${availableSeats.length} 個可選`);
+
+        for (let i = 0; i < availableSeats.length; i++) {
+            const currentSeq = [availableSeats[i]];
+            for (let j = 1; j < qty; j++) {
+                if (i + j >= availableSeats.length) break;
+                const prev = currentSeq[j - 1];
+                const next = availableSeats[i + j];
+                if (next.row === prev.row && next.seatNum === prev.seatNum + 1) {
+                    currentSeq.push(next);
+                } else {
+                    break;
+                }
+            }
+            if (currentSeq.length === qty) {
+                console.log(`🎉 找到連續座位！ (Row ${currentSeq[0].row}: ${currentSeq.map(s=>s.seatNum).join(', ')})`);
+                return currentSeq.map(s => s.element);
+            }
+        }
+        return null;
+    }
+
+    // --- 模式 A ---
+    async function runAutoAssignMode() {
+        console.log("🔵 模式 A (選單模式)");
+        await clickPath(document.querySelector('.choose-seat-text'));
+        await sleep(1000);
+
+        for (let pref of PREFERENCE_LIST) {
+            const price = pref[0];
+            const section = pref[1];
+            console.log(`🔹 嘗試: ${price} / ${section}`);
+
+            const arrow = await waitForElement('.Select-arrow-zone', false, 3000);
+            if(arrow) {
+                arrow.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+                arrow.click();
+            }
+            await sleep(500);
+
+            const priceOpt = await waitForElement(`//div[contains(@class, 'Select-option') and contains(., '${price}')]`, true, 3000);
+            if (!priceOpt) continue;
+            priceOpt.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+            priceOpt.click();
+            await sleep(500);
+
+            const secDrop = await waitForElement('.Select-placeholder', false, 3000);
+            if(secDrop) {
+                secDrop.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+                secDrop.click();
+            }
+            await sleep(500);
+
+            const secOpt = await waitForElement(`div[aria-label="${section}"]`, false, 3000);
+            if (!secOpt) {
+                document.body.click();
+                continue;
+            }
+            secOpt.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+            secOpt.click();
+
+            await sleep(1000);
+            const changePopup = document.querySelector('.alert-popup') || document.querySelector('.modal-content');
+            if (changePopup && changePopup.innerText.includes('Change Selection')) {
+                 const ok = document.getElementById('popup-button-0');
+                 if(ok) ok.click();
+            }
+
+            if (await selectQuantityAndCheckError()) {
+                await doConfirm();
+                return;
+            }
+        }
+    }
+
+    // --- 模式 B ---
+    async function runSeatMapMode() {
+        console.log("🟠 模式 B (地圖模式)");
+
+        let waits = 0;
+        while ((!globalOverviewData || !globalDetailsData) && waits < 40) {
+            console.log("⏳ 等待 API...");
+            await sleep(500);
+            waits++;
+        }
+
+        if (!globalOverviewData) { console.error("❌ 無法獲取 API"); return; }
+
+        let targetId = null;
+
+        for (let pref of PREFERENCE_LIST) {
+            const targetLevel = pref[2];
+            const targetCatNum = pref[3];
+            console.log(`🔸 比對: Level='${targetLevel}', CatNum='${targetCatNum}'`);
+
+            let tempId = null;
+            const list = globalOverviewData.seatSectionList;
+
+            if (list) {
+                for (let item of list) {
+                    if (item.SeatLevel) {
+                        for (let lvl of item.SeatLevel) {
+                            if (lvl.seatLevelAlias && targetLevel &&
+                                lvl.seatLevelAlias.toLowerCase() === targetLevel.toLowerCase() &&
+                                String(lvl.priceCategoryNum) === String(targetCatNum)) {
+                                tempId = lvl.seatSectionId;
+                                break;
+                            }
+                        }
+                    }
+                    if (tempId) break;
+                }
+            }
+
+            if (!tempId) {
+                console.log(`❌ 找不到 ID，跳過`);
+                continue;
+            }
+
+            if (globalDetailsData) {
+                const detail = globalDetailsData.find(d => d.seatSectionId == tempId);
+                if (detail && detail.seatSectionAvailability === 0) {
+                    console.warn(`🛑 ID [${tempId}] 庫存為 0，跳過`);
+                    continue;
+                }
+            }
+
+            targetId = tempId;
+            console.log(`🎯 鎖定 ID: ${targetId}`);
+            break;
+        }
+
+        if (!targetId) { alert("❌ 無符合區塊或已售罄"); return; }
+
+        const area = await waitForElement(`area[id="${targetId}"]`, false, 5000);
+        if (area) {
+            await clickPath(area);
+        } else {
+            return;
+        }
+
+        console.log("⏳ 等待 SVG 座位圖渲染...");
+
+        let domWaits = 0;
+        let foundPaths = false;
+        while (domWaits < 40) {
+            const paths = document.querySelectorAll('path.seatmap-clickable');
+            if (paths.length > 0) {
+                foundPaths = true;
+                break;
+            }
+            await sleep(250);
+            domWaits++;
+        }
+
+        if (!foundPaths) {
+            console.error("❌ 超時：SVG 地圖未渲染或無可選座位");
+            return;
+        }
+
+        const targetPathElements = findConsecutiveSeatsFromDOM(TICKET_QUANTITY);
+
+        if (targetPathElements) {
+            console.log("💺 點擊連續座位...");
+            for (let el of targetPathElements) {
+                await clickPath(el);
+                await sleep(150);
+            }
+
+            await sleep(500);
+            const confirmBtn = await waitForElement('.confirm-btn');
+            if(confirmBtn) {
+                 let attempts = 0;
+                 while ((confirmBtn.disabled || confirmBtn.classList.contains('disabled')) && attempts < 20) {
+                     await sleep(200); attempts++;
+                 }
+                 confirmBtn.click();
+                 console.log("✅ 已點擊 Confirm");
+                 startCountdown();
+            }
+        } else {
+            alert("⚠️ 掃描完畢，未找到符合條件的連續座位");
+        }
+    }
+
+    // --- 輔助邏輯 ---
+
+    async function selectQuantityAndCheckError() {
+        let qtyContainer = document.getElementById('react-select-8--value-item');
+        if (!qtyContainer) {
+             const zeroSpan = await waitForElement("//div[contains(@class, 'Select-value')]//span[text()='0']", true, 2000);
+             if(zeroSpan) qtyContainer = zeroSpan.closest('.Select-control');
+        } else {
+             qtyContainer = qtyContainer.closest('.Select-control');
+        }
+
+        if (qtyContainer) {
+             qtyContainer.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+             qtyContainer.click();
+             await sleep(500);
+             const qtyNum = await waitForElement(`div[aria-label="${TICKET_QUANTITY}"]`);
+             if(qtyNum) {
+                 qtyNum.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+                 qtyNum.click();
+             }
+        } else return false;
+
+        await sleep(1000);
+        const err = document.querySelector('.notify-popup');
+        if (err && err.innerText.includes('Insufficient')) {
+            const ok = document.getElementById('popup-button-0');
+            if(ok) ok.click();
+            return false;
+        }
+        return true;
+    }
+
+    async function doConfirm() {
+        console.log("⏳ 等待 Confirm...");
+        await sleep(1000);
+        const btn = await waitForElement('.confirm-btn');
+        if (!btn) return;
+
+        let i = 0;
+        while ((btn.disabled || btn.classList.contains('disabled')) && i < 30) {
+            await sleep(200); i++;
+        }
+        btn.click();
+
+        await sleep(2000);
+        const err = document.querySelector('.notify-popup');
+        if (err && err.innerText.includes('Insufficient')) {
+             const ok = document.getElementById('popup-button-0');
+             if(ok) ok.click();
+             return;
+        }
+        startCountdown();
+    }
+
+    function startCountdown() {
+        console.log(`🛑 成功! 倒數 ${WAIT_MINUTES_BEFORE_CART} 分鐘`);
+        const target = new Date().getTime() + (WAIT_MINUTES_BEFORE_CART * 60000);
+        const t = setInterval(() => {
+            const d = target - new Date().getTime();
+            if (d < 0) {
+                clearInterval(t);
+                const btn = document.getElementById('bs-btn-atc-id');
+                if(btn) btn.click();
+            } else {
+                console.log(`⏰ 剩餘 ${(d/1000).toFixed(0)} 秒`);
+            }
+        }, 1000);
+    }
+
+    // --- 主流程 ---
+    window.addEventListener('load', async function() {
+        await sleep(1500);
+
+        const dateEl = await waitForElement(`td[title="${TARGET_DATE}"] a`, false, 3000);
+        if (dateEl) {
+            console.log("📅 處理日期...");
+            await clickPath(dateEl);
+
+            const ck = await waitForElement('.checkmark', false, 3000);
+            if (ck) {
+                await clickPath(ck);
+
+                // 🔥 新增：監控是否有錯誤彈窗 (occur / occurs) 🔥
+                console.log("⏳ 監控錯誤視窗 (5秒)...");
+                for(let i=0; i<10; i++) { // 檢查 10 次，每次間隔 0.5 秒 = 5秒
+                    const modal = document.querySelector('.notification-modal') || document.querySelector('.notify-popup') || document.querySelector('.modal-content');
+                    if (modal) {
+                        const text = modal.innerText.toLowerCase();
+                        if (text.includes('ocurr')) { // 涵蓋 occur, occurred, occurs
+                            console.warn("⚠️ 偵測到 'occur' 錯誤，立即刷新！");
+                            location.reload();
+                            return; // 終止腳本
+                        }
+                    }
+                    await sleep(500);
+                }
+            }
+        }
+
+        console.log("❓ 判斷模式...");
+        // 增加等待時間，確保日期頁面轉場完成
+        const chooseBtn = await waitForElement('.choose-seat-text', false, 5000);
+
+        if (chooseBtn) {
+            await runAutoAssignMode();
+        } else {
+            await runSeatMapMode();
+        }
+    });
+
+})();
